@@ -1,0 +1,33 @@
+[project]
+name = "folderscribe"
+version = "0.1.0"
+description = "Supervised, physical file organizer for Ubuntu 24.04"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+folderscribe = "folderscribe.main:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
