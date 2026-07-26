@@ -18,6 +18,7 @@ class FileEntry:
 class SkippedEntry:
     path: Path
     reason: str
+    details: str = ""
 
 
 @dataclass(frozen=True)

@@ -139,6 +139,124 @@ class TestOsDirectoryScanner:
         assert before.st_mtime == after.st_mtime
         assert before.st_size == after.st_size
 
+    @pytest.mark.parametrize(
+        "dir_name",
+        [
+            ".git",
+            ".hg",
+            ".svn",
+            ".venv",
+            "venv",
+            "node_modules",
+            "__pycache__",
+            ".mypy_cache",
+            ".pytest_cache",
+            ".ruff_cache",
+        ],
+    )
+    def test_excluded_directory_by_name(
+        self, tmp_path: Path, scanner: OsDirectoryScanner, dir_name: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        excluded = root / dir_name
+        excluded.mkdir()
+        (excluded / "inside.txt").write_text("should not appear")
+        result = scanner.scan(root)
+        paths = [s.path for s in result.skipped]
+        assert excluded in paths
+        entry = next(s for s in result.skipped if s.path == excluded)
+        assert entry.reason == "excluded_directory"
+        assert entry.details == dir_name
+
+    def test_excluded_directory_not_traversed(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        excluded = root / ".git"
+        excluded.mkdir()
+        (excluded / "config").write_text("git config")
+        (excluded / "objects").mkdir()
+        result = scanner.scan(root)
+        assert not any(f.path.parent == excluded for f in result.files)
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            ".git",
+            "pyproject.toml",
+            "package.json",
+            "Cargo.toml",
+            "go.mod",
+            "pom.xml",
+            "build.gradle",
+            "CMakeLists.txt",
+        ],
+    )
+    def test_code_project_by_marker(
+        self, tmp_path: Path, scanner: OsDirectoryScanner, marker: str
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        project = root / "my_project"
+        project.mkdir()
+        (project / marker).write_text("marker content")
+        (project / "readme.txt").write_text("should not appear")
+        result = scanner.scan(root)
+        assert project in [s.path for s in result.skipped]
+        entry = next(s for s in result.skipped if s.path == project)
+        assert entry.reason == "code_project"
+        assert entry.details == marker
+
+    def test_code_project_not_traversed(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        project = root / "my_project"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]")
+        (project / "src" / "main.py").parent.mkdir(parents=True)
+        (project / "src" / "main.py").write_text("# code")
+        result = scanner.scan(root)
+        assert not any(f.path.parent == project for f in result.files)
+
+    def test_normal_code_directory_not_skipped(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        code_dir = root / "scripts"
+        code_dir.mkdir()
+        (code_dir / "script.py").write_text("print('hello')")
+        (code_dir / "data.json").write_text("{}")
+        result = scanner.scan(root)
+        assert code_dir not in [s.path for s in result.skipped]
+        assert result.total_files == 2
+
+    def test_root_with_markers_still_scanned(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:
+        root = tmp_path / "my_project"
+        root.mkdir()
+        (root / "pyproject.toml").write_text("[project]")
+        (root / "README.md").write_text("# Project")
+        result = scanner.scan(root)
+        assert result.total_files == 2
+        assert len(result.skipped) == 0
+
+    def test_exclusions_sorted_output(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:
+        root = tmp_path / "root"
+        root.mkdir()
+        for name in ["node_modules", ".git", ".venv", "venv", "__pycache__"]:
+            (root / name).mkdir()
+        result = scanner.scan(root)
+        paths = [s.path.name for s in result.skipped]
+        assert paths == sorted(paths)
+
 
 class TestScanFolderUseCase:
     def test_nonexistent_path(
