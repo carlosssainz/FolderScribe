@@ -1,0 +1,57 @@
+---
+title: Arquitectura
+description: Capas y reglas arquitectónicas de FolderScribe.
+---
+
+# Arquitectura
+
+## Capas
+
+El proyecto sigue una arquitectura en cuatro capas:
+
+- **domain** — Modelos, interfaces, lógica de negocio pura. No importa
+  PySide6, SQLite, OCR, IA ni detalles del sistema operativo.
+- **application** — Casos de uso que coordinan el flujo entre capas.
+- **infrastructure** — Implementaciones concretas: sistema de archivos, base
+  de datos, extractores, OCR y clasificadores.
+- **ui** — Presentación de información. No contiene lógica principal.
+
+## Reglas
+
+- Usar `pathlib.Path` para todas las rutas.
+- No usar una ruta generada por IA directamente como destino.
+- Los servicios externos deben consumirse a través de interfaces.
+
+## Flujo del inventario con persistencia
+
+```
+CLI (folderscribe scan RUTA [--database RUTA_DB])
+  │
+  ├─> ScanFolderUseCase(scanner, repository?)
+  │     │
+  │     ├─ Si hay repositorio: crea ScanSession (RUNNING)
+  │     │   └─ SqliteScanSessionRepository.create_session()
+  │     │
+  │     ├─ OsDirectoryScanner.scan(root) → InventoryResult
+  │     │
+  │     └─ Si hay repositorio:
+  │           ├─ Mapea InventoryResult → ScanEntry[]
+  │           ├─ SqliteScanSessionRepository.complete_session()
+  │           │   (actualiza estado, guarda entradas y errores)
+  │           └─ Si falla: SqliteScanSessionRepository.mark_session_failed()
+  │
+  └─ CLI imprime resumen (ID sesión, ruta DB, estadísticas)
+```
+
+### Módulo SQLite
+
+- **Archivo:** `src/folderscribe/infrastructure/database.py`
+- **Clase principal:** `SqliteScanSessionRepository` implementa
+  `ScanSessionRepository` (definido en `domain/interfaces.py`)
+- **Ruta por defecto:** `$XDG_DATA_HOME/folderscribe/folderscribe.db`
+  (fallback: `~/.local/share/folderscribe/folderscribe.db`)
+- **Esquema:** versionado (V1), idempotente, `PRAGMA foreign_keys = ON`
+- **Transacciones:** cortas y separadas (creación de sesión y guardado final)
+
+La CLI no ejecuta SQL directamente. Toda la lógica de base de datos reside en
+`infrastructure.database`.

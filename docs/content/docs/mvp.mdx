@@ -1,0 +1,70 @@
+---
+title: MVP
+description: Alcance del primer MVP de FolderScribe.
+---
+
+# FolderScribe — Alcance del MVP
+
+## Objetivo
+
+Escanear una carpeta de prueba en Ubuntu 24.04, mostrar un inventario fiable
+del contenido y preparar propuestas supervisadas de clasificación y renombrado
+sin modificar ningún archivo durante el análisis.
+
+## Funcionalidades incluidas
+
+- Formatos: PDF, DOCX, TXT, Markdown
+- Selección de carpeta de origen
+- Inventario recursivo
+- Identificación de formatos compatibles y no compatibles
+- Exclusiones
+- No seguir enlaces simbólicos
+- Detección y omisión de proyectos de código
+- Índice local
+- Duplicados exactos (SHA-256)
+- Extracción de texto
+- Detección de PDF escaneados
+- OCR rápido y completo
+- Propuestas de clasificación
+- Propuestas de renombrado
+- Explicación y confianza
+- Árbol actual y árbol propuesto
+- Aprobación individual y por grupos
+- Creación supervisada de carpetas
+- Movimiento y renombrado aprobados
+- Historial de 30 días
+- Deshacer operaciones
+- Cuatro niveles de privacidad
+
+## Funcionalidades excluidas
+
+Fotografías, clasificación visual, archivos comprimidos, organización de
+proyectos de programación, vigilancia continua, enlaces simbólicos avanzados,
+eliminación automática, sincronización entre equipos, plantillas compartidas,
+grafo de conocimiento, Windows.
+
+## Reglas de seguridad
+
+- Solo lectura durante el análisis
+- Confirmación obligatoria
+- Límite de alcance a la carpeta seleccionada
+- Deshacer garantizado
+- No a proyectos de código
+- No a enlaces simbólicos
+- Privacidad configurable (por defecto local)
+
+## Criterios de éxito
+
+- Inventario correcto de 50+ archivos mixtos
+- Distinción entre formatos soportados y no soportados
+- Propuestas razonables y explicadas
+- Aprobación, corrección y exclusión sin errores
+- Ejecución exclusivamente según lo confirmado
+- Historial y deshacer durante 30 días
+- Sin procesamiento de symlinks ni proyectos de código
+- Sin envío de datos en nivel local
+
+## Regla de control de alcance
+
+Una funcionalidad excluida no se implementa sin modificar primero este
+documento.

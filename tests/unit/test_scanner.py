@@ -111,7 +111,7 @@ class TestOsDirectoryScanner:
 
         original_scandir = os.scandir
 
-        def _mock_scandir(path):
+        def _mock_scandir(path):  # type: ignore[no-untyped-def]
             if Path(path) == restricted:
                 raise PermissionError(13, "Permission denied")
             return original_scandir(path)

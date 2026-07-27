@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 from folderscribe.domain.interfaces import DirectoryScanner
@@ -129,10 +130,16 @@ class OsDirectoryScanner(DirectoryScanner):
 
                         dirs_to_scan.append(entry_path)
                     elif entry.is_file():
+                        stat = entry_path.stat()
+                        modified_at = datetime.fromtimestamp(
+                            stat.st_mtime, tz=timezone.utc
+                        )
                         files.append(
                             FileEntry(
                                 path=entry_path,
                                 compatibility=_classify(entry_path),
+                                size=stat.st_size,
+                                modified_at=modified_at,
                             )
                         )
                 except OSError as e:

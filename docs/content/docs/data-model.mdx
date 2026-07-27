@@ -1,0 +1,158 @@
+---
+title: Modelo de datos
+description: Modelos de dominio y esquema SQLite de FolderScribe.
+---
+
+# Modelo de datos
+
+## Modelos actuales
+
+### Modelos de dominio (inmutables)
+
+```python
+@dataclass(frozen=True)
+class FileEntry:
+    path: Path
+    compatibility: Compatibility
+    size: int | None = None
+    modified_at: datetime | None = None
+
+@dataclass(frozen=True)
+class SkippedEntry:
+    path: Path
+    reason: str
+    details: str = ""
+
+@dataclass(frozen=True)
+class ScanError:
+    path: Path
+    code: str
+    message: str
+    session_id: str | None = None
+    occurred_at: datetime | None = None
+
+@dataclass(frozen=True)
+class InventoryResult:
+    root: Path
+    files: tuple[FileEntry, ...] = ()
+    skipped: tuple[SkippedEntry, ...] = ()
+    errors: tuple[ScanError, ...] = ()
+```
+
+### Sesiones y elementos persistidos
+
+```python
+class SessionStatus(Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+@dataclass(frozen=True)
+class ScanSession:
+    session_id: str
+    root_path: Path
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: SessionStatus = SessionStatus.RUNNING
+    is_recursive: bool = True
+    total_files: int = 0
+    total_compatible: int = 0
+    total_not_compatible: int = 0
+    total_skipped: int = 0
+    total_errors: int = 0
+
+@dataclass(frozen=True)
+class ScanEntry:
+    session_id: str
+    absolute_path: Path
+    relative_path: str
+    name: str
+    extension: str
+    element_type: str = "file"
+    size: int | None = None
+    modified_at: datetime | None = None
+    is_compatible: bool = False
+    status: str = "indexed"
+    skip_reason: str | None = None
+    is_code_project: bool = False
+```
+
+## Esquema SQLite (V1)
+
+Todas las tablas se crean con `CREATE TABLE IF NOT EXISTS`. La versión del
+esquema se almacena en `schema_version`.
+
+Las fechas se serializan en formato ISO 8601 UTC.
+
+### `schema_version`
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| version | INTEGER (PK) | Número de versión del esquema |
+| applied_at | TEXT | Fecha de aplicación |
+
+### `scan_sessions`
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| session_id | TEXT (PK) | UUID de la sesión |
+| root_path | TEXT | Ruta absoluta del directorio escaneado |
+| started_at | TEXT | Fecha/hora de inicio (ISO 8601) |
+| finished_at | TEXT | Fecha/hora de finalización (puede ser NULL) |
+| status | TEXT | `running`, `completed`, `completed_with_errors`, `failed`, `cancelled` |
+| is_recursive | INTEGER | 1 si el escaneo fue recursivo |
+| total_files | INTEGER | Total de archivos encontrados |
+| total_compatible | INTEGER | Archivos compatibles |
+| total_not_compatible | INTEGER | Archivos no compatibles |
+| total_skipped | INTEGER | Entradas omitidas |
+| total_errors | INTEGER | Errores parciales |
+
+### `scan_entries`
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| entry_id | INTEGER (PK, auto) | Identificador interno |
+| session_id | TEXT (FK) | Sesión a la que pertenece |
+| absolute_path | TEXT | Ruta absoluta normalizada |
+| relative_path | TEXT | Ruta relativa al origen |
+| name | TEXT | Nombre del archivo o directorio |
+| extension | TEXT | Extensión (incluye el punto) |
+| element_type | TEXT | `file`, `directory` u `other` |
+| size | INTEGER | Tamaño en bytes (puede ser NULL) |
+| modified_at | TEXT | Fecha de modificación (puede ser NULL) |
+| is_compatible | INTEGER | 1 si el formato es compatible |
+| status | TEXT | `indexed` o `skipped` |
+| skip_reason | TEXT | Motivo de omisión cuando existe |
+| is_code_project | INTEGER | 1 si se detectó como proyecto de código |
+
+### `scan_errors`
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| error_id | INTEGER (PK, auto) | Identificador interno |
+| session_id | TEXT (FK) | Sesión a la que pertenece |
+| affected_path | TEXT | Ruta del elemento que causó el error |
+| error_code | TEXT | Código de error (`permission`, `access`, etc.) |
+| message | TEXT | Mensaje descriptivo seguro |
+| occurred_at | TEXT | Fecha/hora del error |
+
+## Claves foráneas
+
+```sql
+FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+```
+
+Activadas mediante `PRAGMA foreign_keys = ON`.
+
+## Modelo futuro (no implementado)
+
+En versiones posteriores se añadirán tablas para:
+
+- **Hashes SHA-256** y detección de duplicados exactos.
+- **Contenido extraído** (texto, OCR).
+- **Clasificaciones y etiquetas**.
+- **Propuestas de movimiento y renombrado**.
+- **Historial de operaciones y deshacer**.
+- **Relaciones** entre archivos y entre sesiones.

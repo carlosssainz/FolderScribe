@@ -1,0 +1,25 @@
+---
+title: Privacidad
+description: Niveles de privacidad de FolderScribe.
+---
+
+# Privacidad
+
+## Niveles
+
+| Nivel | Procesado en local | Sale del equipo |
+|-------|-------------------|-----------------|
+| Excluir | Nada | Nada |
+| Solo metadatos | Fecha, tamaño, tipo MIME, nombre | Nada |
+| Local | Metadatos + texto extraído + OCR | Nada |
+| Completo | Todo el análisis | Patrones anónimos (optativo) |
+
+## Configuración
+
+El usuario configura el nivel por archivo o por tipo. El valor predeterminado
+es **local**, que garantiza que ningún dato salga del equipo.
+
+## Principio
+
+FolderScribe está diseñado para funcionar completamente en local. El nivel
+Completo solo envía datos si el usuario lo autoriza explícitamente.

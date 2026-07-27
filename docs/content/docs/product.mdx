@@ -1,0 +1,53 @@
+---
+title: Producto
+description: Visión completa del producto FolderScribe.
+---
+
+# FolderScribe — Visión del producto
+
+## Problema que resuelve
+
+Las carpetas de descargas, documentos y proyectos acumulan archivos sin
+organización. FolderScribe automatiza el análisis, la propuesta de organización
+y el renombrado, manteniendo al usuario en control en cada paso.
+
+## Visión
+
+FolderScribe es un organizador físico e inteligente de archivos para Ubuntu
+24.04. Analiza el contenido de una carpeta, propone una estructura de
+clasificación, explica sus decisiones, solicita aprobación y ejecuta los
+cambios de forma reversible.
+
+## Principios
+
+- **Control del usuario.** Cada movimiento o renombrado requiere aprobación
+  explícita.
+- **Ninguna modificación durante el análisis.** FolderScribe solo lee.
+- **Transparencia.** Toda decisión automática se explica.
+- **Privacidad.** El usuario decide qué información sale de su equipo.
+- **Reversibilidad.** Toda operación se registra y puede deshacerse.
+- **Una única ubicación física por archivo.**
+- **Varias etiquetas en el índice local.**
+
+## Capacidades futuras
+
+Renombrado inteligente, duplicados exactos, documentos similares, OCR, índice
+local, árbol actual y propuesto, plantillas configurables, reglas aprendidas,
+búsqueda en lenguaje natural, imágenes y capturas, Windows, grafo de
+conocimiento.
+
+## Niveles de privacidad
+
+| Nivel | Procesado en local | Sale del equipo |
+|-------|-------------------|-----------------|
+| Excluir | Nada | Nada |
+| Solo metadatos | Fecha, tamaño, tipo MIME, nombre | Nada |
+| Local | Metadatos + texto + OCR | Nada |
+| Completo | Todo | Patrones anónimos (optativo) |
+
+Por defecto: **local**.
+
+## Visión vs. MVP
+
+Este documento describe la visión completa. El MVP inicial se define en
+[MVP](/docs/mvp).

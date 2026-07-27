@@ -24,3 +24,23 @@ mypy src
 ```bash
 folderscribe
 ```
+
+## Documentation
+
+The documentation site lives in `docs/` and is built with Fumadocs (Next.js).
+
+```bash
+cd docs
+npm install
+npm run dev
+```
+
+Open http://localhost:3000 in your browser.
+
+### Build
+
+```bash
+cd docs
+npm run build
+npm run start
+```

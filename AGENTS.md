@@ -1,5 +1,16 @@
 # AGENTS.md
 
+## Documentation map by task type
+
+| Task | Read first |
+|---|---|
+| Scan, inventory, filesystem | `docs/content/docs/mvp.mdx`, `docs/content/docs/architecture.mdx`, `docs/content/docs/privacy.mdx` |
+| Domain models, data changes | `docs/content/docs/data-model.mdx` |
+| UI, GUI, user-facing features | `docs/content/docs/architecture.mdx` |
+| Privacy, file reading, content processing | `docs/content/docs/privacy.mdx` |
+| Scope changes, feature requests | `docs/content/docs/mvp.mdx` (scope control rule) |
+| Any change that affects behaviour | `docs/content/docs/product.mdx`, `docs/content/docs/mvp.mdx`, `docs/content/docs/architecture.mdx` |
+
 ## Project purpose
 
 FolderScribe is a supervised, physical file organizer for Ubuntu 24.04. It
@@ -9,11 +20,11 @@ first target use case is the Downloads folder. Windows support will come after
 the main flow stabilizes.
 
 Before making changes, agents must consult:
-- `docs/PRODUCT.md` — vision, principles, privacy levels
-- `docs/MVP.md` — included/excluded features, safety rules
-- `docs/ARCHITECTURE.md` — when it contains applicable guidance
-- `docs/DATA_MODEL.md` — for data or persistence changes
-- `docs/PRIVACY.md` — for file reading or processing
+- `docs/content/docs/product.mdx` — vision, principles, privacy levels
+- `docs/content/docs/mvp.mdx` — included/excluded features, safety rules
+- `docs/content/docs/architecture.mdx` — when it contains applicable guidance
+- `docs/content/docs/data-model.mdx` — for data or persistence changes
+- `docs/content/docs/privacy.mdx` — for file reading or processing
 
 ## Current MVP
 
@@ -31,7 +42,7 @@ archives, code project organization, continuous watching, advanced symlinks,
 automatic deletion, cross-device sync, shared templates, knowledge graph,
 Windows.
 
-See `docs/MVP.md` for the full list and scope control rule.
+See `docs/content/docs/mvp.mdx` for the full list and scope control rule.
 
 ## Non-negotiable safety rules
 
@@ -61,7 +72,7 @@ Layers: `domain`, `application`, `infrastructure`, `ui`.
 - Never use an AI-generated path directly as a destination.
 - External services must be consumed through interfaces.
 
-These rules may be extended in `docs/ARCHITECTURE.md`.
+These rules may be extended in `docs/content/docs/architecture.mdx`.
 
 ## Development workflow
 
@@ -75,7 +86,7 @@ Before implementing a task:
 
 Rules:
 - Do not add dependencies without justification.
-- Do not implement future features without first updating `docs/MVP.md`.
+- Do not implement future features without first updating `docs/content/docs/mvp.mdx`.
 - Do not perform unsolicited refactoring.
 - Do not commit automatically.
 - Do not modify files outside the task scope.
@@ -103,8 +114,7 @@ A task is complete only when:
 ## Current project status
 
 - Project structure is created.
-- `docs/PRODUCT.md` and `docs/MVP.md` are defined.
-- No functionality has been implemented yet.
-- The next technical goal is to configure the Python project.
-- The first future functional milestone is to inventory a sandbox without
-  modifying it.
+- `docs/content/docs/product.mdx` and `docs/content/docs/mvp.mdx` are defined.
+- CLI inventory works (scan, exclusions, code project detection).
+- Documentation site lives in `docs/` (Fumadocs).
+- The next technical goal is the local SQLite index.

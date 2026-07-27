@@ -1,17 +1,20 @@
-from enum import Enum, auto
-from pathlib import Path
 from dataclasses import dataclass
+from datetime import datetime
+from enum import Enum
+from pathlib import Path
 
 
 class Compatibility(Enum):
-    COMPATIBLE = auto()
-    NOT_COMPATIBLE = auto()
+    COMPATIBLE = "compatible"
+    NOT_COMPATIBLE = "not_compatible"
 
 
 @dataclass(frozen=True)
 class FileEntry:
     path: Path
     compatibility: Compatibility
+    size: int | None = None
+    modified_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -26,6 +29,47 @@ class ScanError:
     path: Path
     code: str
     message: str
+    session_id: str | None = None
+    occurred_at: datetime | None = None
+
+
+class SessionStatus(Enum):
+    RUNNING = "running"
+    COMPLETED = "completed"
+    COMPLETED_WITH_ERRORS = "completed_with_errors"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
+@dataclass(frozen=True)
+class ScanSession:
+    session_id: str
+    root_path: Path
+    started_at: datetime
+    finished_at: datetime | None = None
+    status: SessionStatus = SessionStatus.RUNNING
+    is_recursive: bool = True
+    total_files: int = 0
+    total_compatible: int = 0
+    total_not_compatible: int = 0
+    total_skipped: int = 0
+    total_errors: int = 0
+
+
+@dataclass(frozen=True)
+class ScanEntry:
+    session_id: str
+    absolute_path: Path
+    relative_path: str
+    name: str
+    extension: str
+    element_type: str = "file"
+    size: int | None = None
+    modified_at: datetime | None = None
+    is_compatible: bool = False
+    status: str = "indexed"
+    skip_reason: str | None = None
+    is_code_project: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,3 +102,7 @@ class InventoryResult:
     @property
     def total_errors(self) -> int:
         return len(self.errors)
+
+
+class PersistenceError(Exception):
+    """Raised when persisting a scan session fails."""

@@ -1,6 +1,8 @@
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 from folderscribe.domain.models import (
     Compatibility,
     FileEntry,
@@ -14,13 +16,15 @@ def test_main_returns_zero() -> None:
     assert main([]) == 0
 
 
-def test_main_prints_message(capsys) -> None:
+def test_main_prints_message(capsys: pytest.CaptureFixture[str]) -> None:
     main([])
     captured = capsys.readouterr()
     assert captured.out.strip() == "FolderScribe is ready."
 
 
-def test_scan_empty_directory(tmp_path: Path, capsys) -> None:
+def test_scan_empty_directory(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = tmp_path / "empty"
     root.mkdir()
     exit_code = main(["scan", str(root)])
@@ -30,7 +34,7 @@ def test_scan_empty_directory(tmp_path: Path, capsys) -> None:
     assert "Errors: 0" in captured.out
 
 
-def test_scan_with_files(tmp_path: Path, capsys) -> None:
+def test_scan_with_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / "root"
     root.mkdir()
     (root / "doc.pdf").write_text("pdf")
@@ -47,7 +51,7 @@ def test_scan_with_files(tmp_path: Path, capsys) -> None:
     assert "  image.jpg" not in captured.out
 
 
-def test_scan_nonexistent_path(capsys) -> None:
+def test_scan_nonexistent_path(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = main(["scan", "/this/path/does/not/exist_42"])
     assert exit_code == 2
     captured = capsys.readouterr()
@@ -55,7 +59,7 @@ def test_scan_nonexistent_path(capsys) -> None:
     assert captured.out == ""
 
 
-def test_scan_path_is_file(tmp_path: Path, capsys) -> None:
+def test_scan_path_is_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = tmp_path / "a_file.txt"
     path.write_text("not a directory")
     exit_code = main(["scan", str(path)])
@@ -65,7 +69,7 @@ def test_scan_path_is_file(tmp_path: Path, capsys) -> None:
     assert captured.out == ""
 
 
-def test_scan_sorted_output(tmp_path: Path, capsys) -> None:
+def test_scan_sorted_output(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / "root"
     root.mkdir()
     (root / "b.txt").write_text("b")
@@ -81,7 +85,9 @@ def test_scan_sorted_output(tmp_path: Path, capsys) -> None:
     assert idx_a < idx_b < idx_c
 
 
-def test_scan_errors_partial_return_1(tmp_path: Path, capsys) -> None:
+def test_scan_errors_partial_return_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     root = tmp_path / "root"
     root.mkdir()
     (root / "ok.pdf").write_text("ok")

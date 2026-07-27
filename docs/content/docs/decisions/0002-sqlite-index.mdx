@@ -1,0 +1,73 @@
+---
+title: "Decisión 2: Índice local SQLite"
+description: Decisiones arquitectónicas para la implementación del índice local SQLite.
+---
+
+# 2. Índice local SQLite
+
+## Contexto
+
+FolderScribe necesita persistir los inventarios generados por `folderscribe scan`
+para consulta posterior, historial y futuras operaciones (detección de
+duplicados, clasificación, propuestas, deshacer).
+
+## Decisiones
+
+### 1. sqlite3 del módulo estándar
+
+Se elige `sqlite3` de la biblioteca estándar de Python. Sin ORM ni
+dependencias externas.
+
+**Razones:** cero dependencias adicionales, madurez, amplio soporte,
+suficiente para el volumen de datos esperado (miles de archivos por sesión).
+
+### 2. Migración por versión explícita
+
+Tabla `schema_version` con una fila que registra la versión actual del
+esquema. Al abrir la base, se comprueba la versión y se aplican migraciones
+si es necesario. La V1 incluye las tablas `scan_sessions`, `scan_entries`
+y `scan_errors`.
+
+### 3. Ruta predeterminada centralizada
+
+`get_default_db_path()` en `infrastructure/database.py` resuelve la ruta
+siguiendo la especificación XDG Base Directory:
+
+1. `$XDG_DATA_HOME/folderscribe/folderscribe.db` si la variable está definida
+2. `~/.local/share/folderscribe/folderscribe.db` como fallback
+
+### 4. Separación sesión vs. elementos
+
+Una sesión de escaneo (`scan_sessions`) agrupa los resultados de una
+ejecución de `folderscribe scan`. Los elementos detectados
+(`scan_entries`) y errores parciales (`scan_errors`) pertenecen a una
+sesión mediante clave foránea. Esto permite ejecutar múltiples escaneos
+de la misma carpeta sin mezclar resultados.
+
+### 5. Ciclo de vida de sesión
+
+- **create_session:** persiste sesión en estado RUNNING antes de escanear
+- **complete_session:** actualiza estadísticas, guarda entradas y errores
+  en una sola transacción; cambia estado a COMPLETED o COMPLETED_WITH_ERRORS
+- **mark_session_failed:** ante fallos fatales, marca como FAILED y registra
+  el error del sistema
+
+### 6. Transacciones cortas
+
+No se mantiene una transacción abierta durante el recorrido del sistema de
+archivos. La sesión RUNNING se confirma inmediatamente. El guardado final
+usa una transacción independiente.
+
+### 7. Fechas con zona horaria
+
+Los modelos de dominio usan `datetime` con `timezone.utc`. La infraestructura
+serializa en ISO 8601 UTC.
+
+## Consecuencias
+
+- La CLI requiere crear el directorio padre de la base si no existe.
+- Si falla la creación de la sesión, el escaneo no se inicia.
+- Si falla el guardado final, el error se propaga como `PersistenceError`
+  y no se muestra "guardado correctamente".
+- Las futuras tablas (hashes, contenido, etiquetas) seguirán el mismo
+  patrón de versión y migración.
