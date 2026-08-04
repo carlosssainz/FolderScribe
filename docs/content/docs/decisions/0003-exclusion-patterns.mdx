@@ -1,0 +1,93 @@
+---
+title: "Decisión 3: Exclusiones personalizadas por patrón"
+description: Decisiones arquitectónicas para la implementación de exclusiones personalizadas.
+---
+
+# 3. Exclusiones personalizadas por patrón
+
+## Contexto
+
+FolderScribe necesita permitir que el usuario excluya archivos o directorios
+del inventario mediante patrones de nombre, sin necesidad de editar un
+archivo de configuración. Las exclusiones deben aplicarse solo a la sesión
+actual y quedar registradas para auditoría.
+
+## Decisiones
+
+### 1. Semántica de patrones
+
+- **Sin `/`:** el patrón se compara con el nombre base (basename) del
+  elemento a cualquier profundidad. Ej: `*.tmp` excluye `a.tmp` y
+  `sub/a.tmp`.
+- **Con `/`:** el patrón se compara con la ruta relativa completa respecto a
+  la raíz del escaneo. Ej: `privado/**` excluye `privado/doc.pdf` pero no
+  `publico/doc.pdf`.
+- **Sensible a mayúsculas/minúsculas** en esta versión.
+- **Sin `/` inicial:** no se admiten rutas absolutas como patrones.
+- Implementación con `fnmatch` del módulo estándar. Sin dependencias externas.
+
+### 2. Precedencia en el escáner
+
+1. Symlink → skip (`reason = "symlink"`)
+2. Directorio en exclusiones técnicas → skip (`"excluded_directory"`)
+3. Proyecto de código → skip (`"code_project"`)
+4. Exclusión de usuario → skip (`"excluded_by_user_pattern"`)
+
+Las exclusiones personalizadas no pueden anular las reglas de seguridad:
+
+- Los enlaces simbólicos siempre se omiten primero.
+- Las exclusiones técnicas (`_EXCLUDED_DIR_NAMES`) siguen aplicándose.
+- Los proyectos de código se detectan y omiten antes de evaluar patrones.
+
+### 3. Poda de subárbol
+
+Si un directorio coincide con una exclusión de usuario, no se recorre su
+contenido. El directorio se registra como un único elemento `skipped`. No
+se simula el descubrimiento de sus descendientes.
+
+### 4. ExclusionMatcher como servicio de dominio
+
+`ExclusionMatcher` vive en `src/folderscribe/domain/exclusion.py`. Es un
+servicio puro que toma `tuple[ExclusionRule, ...]` y responde:
+
+- `is_excluded(relative_path) -> (bool, ExclusionRule | None)`
+
+No contiene detalles de argparse, SQLite ni del sistema operativo.
+
+### 5. Persistencia por sesión
+
+Las reglas `--exclude` se guardan inmediatamente después de crear la sesión
+(RUNNING). Si el escaneo falla después, las reglas ya están persistidas y
+no se pierden. Esto permite auditar qué exclusiones se usaron incluso en
+sesiones fallidas.
+
+### 6. Exclusiones técnicas no se persisten
+
+Las exclusiones técnicas (`_EXCLUDED_DIR_NAMES`) son parte del código de
+FolderScribe, no de la configuración de la sesión. Solo las reglas
+suministradas por el usuario mediante `--exclude` se almacenan en
+`scan_exclusion_rules` con `source = 'user'`.
+
+### 7. Migración V1→V2 secuencial
+
+- Nueva base: se crea V1 y luego se aplica V2 en la misma ejecución.
+- Base V1 existente: se ejecuta la migración V2 contra el esquema actual.
+- `ALTER TABLE` para `skip_detail` es condicional (`PRAGMA table_info`).
+- Versión futura desconocida (>2): error fatal, no se degrada.
+
+### 8. Ciclo de vida de sesión con reglas
+
+1. `create_session` → RUNNING
+2. `save_exclusion_rules` → guarda `scan_exclusion_rules`
+3. `complete_session` o `mark_session_failed` → finaliza la sesión
+
+Las reglas (paso 2) ocurren antes del escaneo y son independientes del
+resultado de este.
+
+## Consecuencias
+
+- La CLI añade `--exclude` repetible. Validación de patrón vacío y absoluto.
+- El caso de uso pasa `exclusion_rules` al escáner y al repositorio.
+- El escáner crea un `ExclusionMatcher` si hay reglas.
+- La base de datos migra a V2 con `scan_exclusion_rules` y `skip_detail`.
+- Las pruebas cubren coincidencia, poda, precedencia y persistencia.

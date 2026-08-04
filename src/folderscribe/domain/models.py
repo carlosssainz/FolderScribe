@@ -9,6 +9,17 @@ class Compatibility(Enum):
     NOT_COMPATIBLE = "not_compatible"
 
 
+class RuleSource(Enum):
+    USER = "user"
+    TECHNICAL = "technical"  # Reserved for future use
+
+
+@dataclass(frozen=True)
+class ExclusionRule:
+    pattern: str
+    source: RuleSource
+
+
 @dataclass(frozen=True)
 class FileEntry:
     path: Path
@@ -70,6 +81,7 @@ class ScanEntry:
     status: str = "indexed"
     skip_reason: str | None = None
     is_code_project: bool = False
+    skip_detail: str = ""
 
 
 @dataclass(frozen=True)

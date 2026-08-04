@@ -1,6 +1,8 @@
 {
   "pages": [
     "0001-initial-architecture",
-    "0002-sqlite-index"
+    "0002-sqlite-index",
+    "0003-exclusion-patterns",
+    "0004-ocr"
   ]
 }

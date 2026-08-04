@@ -1,0 +1,85 @@
+---
+title: "Decisión 4: OCR local"
+description: Decisiones para la implementación del OCR en PDFs escaneados.
+---
+
+# 4. OCR local
+
+## Contexto
+
+La heurística `NEEDS_OCR` ya detecta PDFs escaneados (sin capa de texto) y
+persiste el estado en `text_extractions`. Falta el motor que convierta las
+páginas escaneadas en texto utilizable para clasificación y búsqueda.
+
+El nivel de privacidad **Local** incluye OCR, por lo que todo debe procesarse
+en el equipo, sin envío a servicios externos.
+
+## Decisiones
+
+### 1. Tesseract como motor OCR
+
+Se usa Tesseract (binario del sistema) a través del wrapper `pytesseract`.
+Es el estándar de facto para OCR local en Linux, sin dependencias de red.
+
+**Dependencia de sistema:** `tesseract-ocr` (y `tesseract-ocr-spa` para
+español). Si no está instalado, el caso de uso devuelve
+`engine_available = False` sin fallar; la GUI y la CLI muestran un mensaje
+claro.
+
+### 2. Renderizado de páginas con PyMuPDF
+
+PyMuPDF (`fitz`) renderiza páginas PDF a imágenes en memoria (sin archivos
+temporales en disco, respetando la privacidad local). No requiere
+`poppler-utils` ni otros binarios del sistema.
+
+### 3. Rápido vs. completo
+
+Los dos modos del MVP se implementan ajustando resolución y modo de
+segmentación de Tesseract, sin descargar modelos adicionales:
+
+| Modo | DPI | PSM | Uso |
+|------|-----|-----|-----|
+| `fast` | 150 | 3 (auto) | Previsualización rápida |
+| `full` | 300 | 6 (bloque uniforme) | Precisión máxima |
+
+### 4. Interfaz `OcrEngine` en el dominio
+
+El dominio define la interfaz abstracta `OcrEngine`
+(`is_available`, `ocr_pdf`, `name`, `version`) y los modelos puros
+(`OcrMode`, `OcrPage`, `OcrPdfDocument`, `OcrResult`, `OcrError`).
+`TesseractOcrEngine` (infraestructura) es la única implementación.
+
+### 5. `OcrTextUseCase` separado de la extracción
+
+El OCR se coordina desde un caso de uso propio (`OcrTextUseCase`), no dentro
+de `PdfTextExtractor`. Procesa solo extracciones con `needs_ocr = True`,
+respeta `privacy_filter`, cancelación, lotes de 50 y progreso, igual que
+`ExtractTextUseCase`.
+
+### 6. Reutilización de `text_extractions` sin migración
+
+Los resultados OCR se guardan como filas nuevas en `text_extractions` con
+`extractor = "pdf_ocr"` y `needs_ocr = 0`. No se requiere migración V5.
+
+- La reutilización usa `find_reusable_extraction` con una `config_version`
+  propia del OCR (modo, DPI, PSM, idioma y versión del motor), sin invalidar
+  la caché de extracción de texto normal.
+- Las consultas de contenido (`get_text_extraction_by_path` y
+  `get_text_extraction_by_entry`) ordenan por `needs_ocr ASC,
+  extraction_id DESC`, de modo que el resultado OCR tiene preferencia sobre
+  la fila `NEEDS_OCR`.
+
+### 7. Exposición en GUI y CLI
+
+- **GUI:** botón "OCR" con selector Rápido/Completo, ejecutado en un
+  `QThread` (`OcrWorker`) con progreso y cancelación. El motor es inyectable
+  para poder usar fakes deterministas en pruebas.
+- **CLI:** `folderscribe scan RUTA --ocr-mode fast|full`. Por defecto el OCR
+  no se ejecuta (no cambia el comportamiento existente del scan).
+
+## Consecuencias
+
+- `pymupdf` y `pytesseract` pasan a ser dependencias obligatorias del paquete.
+- `tesseract-ocr` es un requisito del sistema documentado en el README.
+- Las pruebas unitarias y de integración usan `FakeOcrEngine`; el motor real
+  se prueba con dependencias simuladas (`fitz`, `pytesseract` falsos).

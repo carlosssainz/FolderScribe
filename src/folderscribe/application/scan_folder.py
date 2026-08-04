@@ -6,6 +6,7 @@ from uuid import uuid4
 from folderscribe.domain.interfaces import DirectoryScanner, ScanSessionRepository
 from folderscribe.domain.models import (
     Compatibility,
+    ExclusionRule,
     InventoryResult,
     PersistenceError,
     ScanEntry,
@@ -30,7 +31,11 @@ class ScanFolderUseCase:
         self._scanner = scanner
         self._repository = repository
 
-    def execute(self, root: Path) -> ScanResult:
+    def execute(
+        self,
+        root: Path,
+        exclusion_rules: tuple[ExclusionRule, ...] = (),
+    ) -> ScanResult:
         if not root.exists():
             raise FileNotFoundError(f"Path does not exist: {root}")
         if not root.is_dir():
@@ -46,8 +51,9 @@ class ScanFolderUseCase:
                 status=SessionStatus.RUNNING,
             )
             self._repository.create_session(session)
+            self._repository.save_exclusion_rules(session.session_id, exclusion_rules)
 
-        inventory = self._scanner.scan(root)
+        inventory = self._scanner.scan(root, exclusion_rules)
 
         if self._repository is not None and session is not None:
             session = self._save_results(session, root, inventory)
@@ -146,6 +152,7 @@ def _map_to_entries(
                 status="skipped",
                 skip_reason=s.reason,
                 is_code_project=s.reason == "code_project",
+                skip_detail=s.details,
             )
         )
     return entries

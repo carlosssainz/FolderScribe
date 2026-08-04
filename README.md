@@ -2,6 +2,17 @@
 
 A supervised, physical file organizer for Ubuntu 24.04.
 
+## System requirements
+
+OCR for scanned PDFs requires Tesseract on the system:
+
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-spa
+```
+
+Without it, FolderScribe still works: scanned PDFs are detected and reported,
+and OCR commands show a clear message instead of failing.
+
 ## Development
 
 ```bash

@@ -288,3 +288,117 @@ class TestScanFolderUseCase:
         assert result.total_files == 2
         assert result.total_skipped == 1
         assert result.total_errors == 1
+
+
+class TestUserExclusionsInScanner:
+    def test_user_pattern_skips_files_at_root(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "keep.txt").write_text("keep")
+        (root / "skip.tmp").write_text("skip")
+        rules = (ExclusionRule("*.tmp", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        assert result.total_files == 1
+        assert result.files[0].path.name == "keep.txt"
+        skipped_paths = [s.path.name for s in result.skipped]
+        assert "skip.tmp" in skipped_paths
+        entry = next(s for s in result.skipped if s.path.name == "skip.tmp")
+        assert entry.reason == "excluded_by_user_pattern"
+        assert entry.details == "*.tmp"
+
+    def test_user_pattern_at_depth(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "deep.tmp").write_text("deep skip")
+        (sub / "keep.md").write_text("keep")
+        rules = (ExclusionRule("*.tmp", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        assert result.total_files == 1
+        assert result.files[0].path.name == "keep.md"
+        assert any(s.path.name == "deep.tmp" for s in result.skipped)
+
+    def test_user_pattern_prunes_directory(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        excluded_dir = root / "privado"
+        excluded_dir.mkdir()
+        (excluded_dir / "secreto.txt").write_text("secret")
+        (excluded_dir / "sub").mkdir()
+        (excluded_dir / "sub" / "mas.txt").write_text("more")
+        rules = (ExclusionRule("privado", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        assert result.total_files == 0
+        assert any(s.path.name == "privado" for s in result.skipped)
+        assert not any("secreto.txt" in str(s.path) for s in result.skipped)
+        assert not any(f.path.parent == excluded_dir for f in result.files)
+
+    def test_symlinks_still_skipped_before_user_pattern(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        target = root / "real.txt"
+        target.write_text("real")
+        link = root / "link.txt"
+        link.symlink_to(target)
+        rules = (ExclusionRule("link.txt", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        symlink_skipped = [s for s in result.skipped if s.reason == "symlink"]
+        assert any(s.path == link for s in symlink_skipped)
+
+    def test_technical_exclusions_still_work(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        excluded = root / ".git"
+        excluded.mkdir()
+        (excluded / "config").write_text("config")
+        rules = (ExclusionRule("*.txt", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        tech_skipped = [s for s in result.skipped if s.reason == "excluded_directory"]
+        assert any(s.path == excluded for s in tech_skipped)
+
+    def test_code_projects_still_protected(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        root = tmp_path / "root"
+        root.mkdir()
+        project = root / "my_project"
+        project.mkdir()
+        (project / "pyproject.toml").write_text("[project]")
+        (project / "readme.txt").write_text("readme")
+        rules = (ExclusionRule("my_project", RuleSource.USER),)
+        result = scanner.scan(root, rules)
+        code_skipped = [s for s in result.skipped if s.reason == "code_project"]
+        assert any(s.path == project for s in code_skipped)
+
+    def test_no_exclusion_rules_preserves_behavior(
+        self, tmp_path: Path, scanner: OsDirectoryScanner
+    ) -> None:  # noqa: E501
+        root = tmp_path / "root"
+        root.mkdir()
+        (root / "a.tmp").write_text("tmp")
+        (root / "b.txt").write_text("txt")
+        result = scanner.scan(root)
+        assert result.total_files == 2

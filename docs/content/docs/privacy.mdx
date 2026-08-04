@@ -23,3 +23,16 @@ es **local**, que garantiza que ningún dato salga del equipo.
 
 FolderScribe está diseñado para funcionar completamente en local. El nivel
 Completo solo envía datos si el usuario lo autoriza explícitamente.
+
+## Exclusiones personalizadas y privacidad
+
+Cuando un elemento coincide con una exclusión personalizada (`--exclude`):
+
+1. **No se recorre ni analiza el contenido.** Para un directorio excluido, se
+   poda completamente el subárbol: ningún archivo dentro de él se visita,
+   indexa ni procesa.
+2. **Metadatos mínimos conservados:** solo se registra una entrada de tipo
+   `skipped` con `skip_reason = "excluded_by_user_pattern"` y `skip_detail =
+   <patrón>`. No se almacena contenido, hash ni texto extraído.
+3. **El patrón se persiste** en `scan_exclusion_rules` para auditoría, pero
+   ningún archivo dentro del directorio excluido aparece en `scan_entries`.

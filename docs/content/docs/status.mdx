@@ -1,12 +1,12 @@
 ---
 title: Estado del proyecto
 description: Estado actual del desarrollo de FolderScribe.
-lastUpdated: 2026-07-27
+lastUpdated: 2026-07-28
 ---
 
 # Estado del proyecto
 
-**Último hito estable:** Índice local SQLite.
+**Último hito estable:** Huellas SHA-256 y duplicados exactos.
 
 **Comprobaciones actuales:** pytest, Ruff, mypy.
 
@@ -28,7 +28,36 @@ lastUpdated: 2026-07-27
 - Índice local SQLite (metadatos del inventario)
 - Persistencia de sesiones, entradas y errores
 - Parámetro `--database` para ruta personalizada
-- Pruebas automatizadas (68 pruebas)
+- Parámetro `--exclude` para exclusiones personalizadas por patrón
+- Parámetro `--no-text` para omitir extracción de texto
+- Parámetro `--no-hash` para omitir cálculo de huellas
+- Persistencia de reglas de exclusión en SQLite
+- Migración de esquema V1 a V2, V2 a V3, V3 a V4
+- ExclusionMatcher en el dominio
+- Pruebas automatizadas (~270+ pruebas)
+- Interfaz gráfica (PySide6): selector de carpeta, exclusiones, escaneo, tabla de resultados, filtros, pestaña de errores, panel de contenido, extracción de texto
+- **Cálculo de huellas SHA-256 por streaming** (bloques de 64 KB)
+- **Detección de duplicados exactos** agrupados por hash y tamaño
+- **Reutilización de huellas** cuando tamaño y fecha de modificación no cambian
+- **Detección de modificaciones durante lectura**
+- **Migración V3** con tabla `content_hashes` e índices
+- **Botón "Calcular huellas"** en GUI con progreso determinado y cancelación
+- **Pestaña de duplicados** con grupos y espacio redundante
+- **Filtro "duplicados"** en la tabla de resultados
+- **Separación de responsabilidades:** `StreamingHasher`, `ComputeHashesUseCase`, `HashWorker`
+- **Extracción local de texto** sin OCR para PDF, DOCX, TXT, Markdown
+- **Migración V4** con tablas `text_extractions` y `scan_entry_extractions`
+- **Reutilización de extracciones** por SHA-256 con invalidación
+- **Heurística NEEDS_OCR** versionada y centralizada
+- **Cuatro niveles de privacidad:** Excluir, Solo metadatos, Local, Completo
+- **Panel de contenido** en GUI con carga bajo demanda (5.000 caracteres)
+- **ExtractTextUseCase** con cancelación, lotes y progreso
+- **OCR local** para PDFs escaneados con Tesseract + PyMuPDF
+- **Modos rápido (150 DPI/PSM 3) y completo (300 DPI/PSM 6)**
+- **OcrTextUseCase** con reutilización, cancelación, lotes y progreso
+- **Botón "OCR"** en GUI con selector de modo y worker en QThread
+- **Flag `--ocr-mode fast|full`** en la CLI (off por defecto)
+- **Degradación elegante** si tesseract no está instalado
 
 ## En desarrollo
 
@@ -36,15 +65,11 @@ lastUpdated: 2026-07-27
 
 ## Pendiente
 
-- Exclusiones personalizadas
-- Hashes y duplicados
-- Extracción de contenido
-- OCR
 - IA
+- Clasificación y propuestas
 - Renombrado
 - Movimientos reversibles
-- Interfaz gráfica
 
 ## Siguiente paso
 
-Exclusiones personalizadas.
+Clasificación y propuestas basadas en el contenido extraído (incluido OCR).

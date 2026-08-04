@@ -2,9 +2,11 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from folderscribe.domain.exclusion import ExclusionMatcher
 from folderscribe.domain.interfaces import DirectoryScanner
 from folderscribe.domain.models import (
     Compatibility,
+    ExclusionRule,
     FileEntry,
     InventoryResult,
     ScanError,
@@ -60,10 +62,16 @@ def _detect_project_marker(dir_path: Path) -> str | None:
 
 
 class OsDirectoryScanner(DirectoryScanner):
-    def scan(self, root: Path) -> InventoryResult:
+    def scan(
+        self,
+        root: Path,
+        exclusion_rules: tuple[ExclusionRule, ...] = (),
+    ) -> InventoryResult:
         files: list[FileEntry] = []
         skipped: list[SkippedEntry] = []
         errors: list[ScanError] = []
+
+        matcher = ExclusionMatcher(exclusion_rules) if exclusion_rules else None
 
         dirs_to_scan: list[Path] = [root]
 
@@ -128,8 +136,36 @@ class OsDirectoryScanner(DirectoryScanner):
                             )
                             continue
 
+                        if matcher is not None:
+                            relative = entry_path.relative_to(root).as_posix()
+                            excluded, rule = matcher.is_excluded(relative)
+                            if excluded:
+                                assert rule is not None
+                                skipped.append(
+                                    SkippedEntry(
+                                        path=entry_path,
+                                        reason="excluded_by_user_pattern",
+                                        details=rule.pattern,
+                                    )
+                                )
+                                continue
+
                         dirs_to_scan.append(entry_path)
                     elif entry.is_file():
+                        if matcher is not None:
+                            relative = entry_path.relative_to(root).as_posix()
+                            excluded, rule = matcher.is_excluded(relative)
+                            if excluded:
+                                assert rule is not None
+                                skipped.append(
+                                    SkippedEntry(
+                                        path=entry_path,
+                                        reason="excluded_by_user_pattern",
+                                        details=rule.pattern,
+                                    )
+                                )
+                                continue
+
                         stat = entry_path.stat()
                         modified_at = datetime.fromtimestamp(
                             stat.st_mtime, tz=timezone.utc

@@ -654,3 +654,519 @@ class TestSymlinkExclusion:
         skip_reasons = {r[0]: r[1] for r in skipped_entries}
         assert skip_reasons.get("link.txt") == "symlink"
         assert skip_reasons.get("dir_link") == "symlink"
+
+
+class TestExclusionRulesPersistence:
+    def test_save_exclusion_rules(self, repo: SqliteScanSessionRepository) -> None:
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+
+        session = ScanSession(
+            session_id="excl-test",
+            root_path=Path("/tmp/test"),
+            started_at=datetime.now(timezone.utc),
+        )
+        repo.create_session(session)
+        rules = (
+            ExclusionRule("*.tmp", RuleSource.USER),
+            ExclusionRule("privado/**", RuleSource.USER),
+        )
+        repo.save_exclusion_rules("excl-test", rules)
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(repo._db_path))
+        rows = conn.execute(
+            "SELECT pattern, source FROM scan_exclusion_rules "
+            "WHERE session_id = ? ORDER BY pattern",
+            ("excl-test",),
+        ).fetchall()
+        conn.close()
+        assert len(rows) == 2
+        assert rows[0][0] == "*.tmp"
+        assert rows[0][1] == "user"
+        assert rows[1][0] == "privado/**"
+        assert rows[1][1] == "user"
+
+    def test_save_no_rules_does_nothing(
+        self, repo: SqliteScanSessionRepository
+    ) -> None:
+        session = ScanSession(
+            session_id="excl-none",
+            root_path=Path("/tmp/test"),
+            started_at=datetime.now(timezone.utc),
+        )
+        repo.create_session(session)
+        repo.save_exclusion_rules("excl-none", ())
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(repo._db_path))
+        count = conn.execute(
+            "SELECT COUNT(*) FROM scan_exclusion_rules WHERE session_id = ?",
+            ("excl-none",),
+        ).fetchone()[0]
+        conn.close()
+        assert count == 0
+
+    def test_scan_with_exclusion_persists_rules(
+        self, repo: SqliteScanSessionRepository, tmp_path: Path
+    ) -> None:
+        from folderscribe.application.scan_folder import ScanFolderUseCase
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+        from folderscribe.infrastructure.scanner import OsDirectoryScanner
+
+        scan_root = tmp_path / "scan_root"
+        scan_root.mkdir()
+        (scan_root / "keep.txt").write_text("keep")
+        (scan_root / "skip.tmp").write_text("skip")
+
+        scanner = OsDirectoryScanner()
+        use_case = ScanFolderUseCase(scanner, repo)
+        rules = (ExclusionRule("*.tmp", RuleSource.USER),)
+        result = use_case.execute(scan_root, rules)
+        assert result.session is not None
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(repo._db_path))
+        rule_rows = conn.execute(
+            "SELECT pattern, source FROM scan_exclusion_rules WHERE session_id = ?",
+            (result.session.session_id,),
+        ).fetchall()
+        entry_rows = conn.execute(
+            "SELECT name, status, skip_reason, skip_detail FROM scan_entries "
+            "WHERE session_id = ? ORDER BY name",
+            (result.session.session_id,),
+        ).fetchall()
+        conn.close()
+
+        assert len(rule_rows) == 1
+        assert rule_rows[0][0] == "*.tmp"
+        assert rule_rows[0][1] == "user"
+
+        names = {r[0]: r for r in entry_rows}
+        assert names["keep.txt"][1] == "indexed"
+        assert names["skip.tmp"][1] == "skipped"
+        assert names["skip.tmp"][2] == "excluded_by_user_pattern"
+        assert names["skip.tmp"][3] == "*.tmp"
+
+
+class TestScanWithExclusions:
+    def test_scan_with_exclude_flag_files_only(self, tmp_path: Path) -> None:
+        from folderscribe.main import main
+
+        root = tmp_path / "test_root"
+        root.mkdir()
+        (root / "keep.txt").write_text("keep")
+        (root / "a.tmp").write_text("skip")
+        (root / "b.tmp").write_text("skip")
+        db = tmp_path / "test.db"
+
+        exit_code = main(
+            [
+                "scan",
+                str(root),
+                "--database",
+                str(db),
+                "--exclude",
+                "*.tmp",
+            ]
+        )
+        assert exit_code == 0
+
+    def test_scan_with_multiple_exclude(self, tmp_path: Path) -> None:
+        from folderscribe.main import main
+
+        root = tmp_path / "test_root"
+        root.mkdir()
+        (root / "keep.txt").write_text("keep")
+        (root / "a.tmp").write_text("skip")
+        privado = root / "privado"
+        privado.mkdir()
+        (privado / "secret.txt").write_text("secret")
+        db = tmp_path / "test.db"
+
+        exit_code = main(
+            [
+                "scan",
+                str(root),
+                "--database",
+                str(db),
+                "--exclude",
+                "*.tmp",
+                "--exclude",
+                "privado",
+            ]
+        )
+        assert exit_code == 0
+        assert db.exists()
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(db))
+        entries = conn.execute(
+            "SELECT name, status FROM scan_entries WHERE session_id = "
+            "(SELECT session_id FROM scan_sessions ORDER BY started_at DESC LIMIT 1)"
+        ).fetchall()
+        entry_map = {r[0]: r[1] for r in entries}
+        conn.close()
+        assert entry_map["keep.txt"] == "indexed"
+        assert entry_map["a.tmp"] == "skipped"
+        assert entry_map["privado"] == "skipped"
+
+    def test_scan_without_exclude_still_works(self, tmp_path: Path) -> None:
+        from folderscribe.main import main
+
+        root = tmp_path / "test_root"
+        root.mkdir()
+        (root / "a.txt").write_text("a")
+        (root / "b.tmp").write_text("b")
+        db = tmp_path / "test.db"
+
+        exit_code = main(
+            [
+                "scan",
+                str(root),
+                "--database",
+                str(db),
+            ]
+        )
+        assert exit_code == 0
+
+
+class TestSchemaMigration:
+    def test_new_database_is_v3(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "new_v3.db"
+        repo = SqliteScanSessionRepository(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        has_rules_table = (  # noqa: E501
+            conn.execute(  # noqa: E501
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='scan_exclusion_rules'"  # noqa: E501
+            ).fetchone()
+            is not None
+        )
+        has_skip_detail = any(
+            row[1] == "skip_detail"
+            for row in conn.execute("PRAGMA table_info(scan_entries)")
+        )
+        has_hashes_table = (  # noqa: E501
+            conn.execute(  # noqa: E501
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='content_hashes'"  # noqa: E501
+            ).fetchone()
+            is not None
+        )
+        conn.close()
+        repo.close()
+
+        assert version == 4
+        assert has_rules_table
+        assert has_skip_detail
+        assert has_hashes_table
+
+    def test_migrate_v1_to_v3_preserves_data(self, tmp_path: Path) -> None:  # noqa: E501
+        import sqlite3
+
+        db_path = tmp_path / "v1_to_v3.db"
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript("""  -- noqa: E501
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version (
+                version, applied_at
+            ) VALUES (1, '2026-07-27T00:00:00+00:00');
+            CREATE TABLE scan_sessions (
+                session_id TEXT PRIMARY KEY, root_path TEXT NOT NULL,
+                started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
+                is_recursive INTEGER NOT NULL DEFAULT 1,
+                total_files INTEGER NOT NULL DEFAULT 0,
+                total_compatible INTEGER NOT NULL DEFAULT 0,
+                total_not_compatible INTEGER NOT NULL DEFAULT 0,
+                total_skipped INTEGER NOT NULL DEFAULT 0,
+                total_errors INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO scan_sessions (
+                session_id, root_path, started_at, status
+            ) VALUES (
+                'migrate-test', '/tmp', '2026-07-27T00:00:00+00:00', 'completed'
+            );
+            CREATE TABLE scan_entries (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, absolute_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL, name TEXT NOT NULL,
+                extension TEXT NOT NULL DEFAULT '',
+                element_type TEXT NOT NULL DEFAULT 'file',
+                size INTEGER, modified_at TEXT,
+                is_compatible INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'indexed', skip_reason TEXT,
+                is_code_project INTEGER NOT NULL DEFAULT 0,
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+            );
+            INSERT INTO scan_entries (
+                session_id, absolute_path, relative_path, name, extension, status
+            ) VALUES (
+                'migrate-test', '/tmp/doc.pdf', 'doc.pdf', 'doc.pdf', '.pdf', 'indexed'
+            );
+            CREATE TABLE scan_errors (
+                error_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, affected_path TEXT NOT NULL,
+                error_code TEXT NOT NULL, message TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        repo = SqliteScanSessionRepository(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        session_count = conn.execute("SELECT COUNT(*) FROM scan_sessions").fetchone()[0]
+        entry_count = conn.execute("SELECT COUNT(*) FROM scan_entries").fetchone()[0]
+        has_excl_table = (  # noqa: E501
+            conn.execute(  # noqa: E501
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='scan_exclusion_rules'"  # noqa: E501
+            ).fetchone()
+            is not None
+        )
+        has_skip_detail = any(
+            row[1] == "skip_detail"
+            for row in conn.execute("PRAGMA table_info(scan_entries)")
+        )
+        has_hashes_table = (  # noqa: E501
+            conn.execute(  # noqa: E501
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='content_hashes'"  # noqa: E501
+            ).fetchone()
+            is not None
+        )
+        conn.close()
+        repo.close()
+
+        assert version == 4
+        assert session_count == 1
+        assert entry_count == 1
+        assert has_excl_table
+        assert has_skip_detail
+        assert has_hashes_table
+
+    def test_v3_idempotent(self, tmp_path: Path) -> None:
+        db_path = tmp_path / "v3_idempotent.db"
+        repo1 = SqliteScanSessionRepository(db_path)
+        repo1.close()
+        repo2 = SqliteScanSessionRepository(db_path)
+        repo2.close()
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        conn.close()
+        assert version == 4
+
+    def test_unknown_schema_version_rejected(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "future.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(
+            (
+                "CREATE TABLE schema_version "
+                "(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)"
+            )
+        )
+        conn.execute(
+            (
+                "INSERT INTO schema_version (version, applied_at) "
+                "VALUES (99, '2026-07-27T00:00:00+00:00')"
+            )
+        )
+        conn.commit()
+        conn.close()
+
+        with pytest.raises(Exception) as excinfo:
+            SqliteScanSessionRepository(db_path)
+        assert "99" in str(excinfo.value)
+
+
+class TestExclusionStats:
+    def test_skipped_count_with_user_exclusion(self, tmp_path: Path) -> None:
+        from folderscribe.application.scan_folder import ScanFolderUseCase
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+        from folderscribe.infrastructure.database import SqliteScanSessionRepository
+        from folderscribe.infrastructure.scanner import OsDirectoryScanner
+
+        root = tmp_path / "stats_root"
+        root.mkdir()
+        (root / "keep.txt").write_text("keep")
+        (root / "skip.tmp").write_text("skip")
+        sub = root / "sub"
+        sub.mkdir()
+        (sub / "deep.tmp").write_text("deep skip")
+
+        db_path = tmp_path / "stats.db"
+        repo = SqliteScanSessionRepository(db_path)
+        scanner = OsDirectoryScanner()
+        use_case = ScanFolderUseCase(scanner, repo)
+        rules = (ExclusionRule("*.tmp", RuleSource.USER),)
+        result = use_case.execute(root, rules)
+        repo.close()
+
+        assert result.session is not None
+        assert result.session.total_skipped == 2
+        assert result.session.total_files == 1
+
+    def test_excluded_directory_content_not_in_entries(self, tmp_path: Path) -> None:
+        from folderscribe.application.scan_folder import ScanFolderUseCase
+        from folderscribe.domain.models import ExclusionRule, RuleSource
+        from folderscribe.infrastructure.database import SqliteScanSessionRepository
+        from folderscribe.infrastructure.scanner import OsDirectoryScanner
+
+        root = tmp_path / "prune_root"
+        root.mkdir()
+        privado = root / "privado"
+        privado.mkdir()
+        (privado / "secreto.txt").write_text("secret")
+        (privado / "sub").mkdir()
+        (privado / "sub" / "mas.txt").write_text("more")
+        (root / "visible.txt").write_text("visible")
+
+        db_path = tmp_path / "prune.db"
+        repo = SqliteScanSessionRepository(db_path)
+        scanner = OsDirectoryScanner()
+        use_case = ScanFolderUseCase(scanner, repo)
+        rules = (ExclusionRule("privado", RuleSource.USER),)
+        result = use_case.execute(root, rules)
+        assert result.session is not None
+        repo.close()
+
+        import sqlite3
+
+        conn = sqlite3.connect(str(db_path))
+        entry_paths = [
+            r[0]
+            for r in conn.execute(
+                "SELECT name FROM scan_entries WHERE session_id = ?",
+                (result.session.session_id,),
+            ).fetchall()
+        ]
+        conn.close()
+
+        assert "visible.txt" in entry_paths
+        assert "privado" in entry_paths
+        assert "secreto.txt" not in entry_paths
+        assert "mas.txt" not in entry_paths
+
+
+class TestSchemaV3Migration:
+    def test_migrate_v2_to_v3_preserves_data(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "v2_to_v3.db"
+
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript("""
+            CREATE TABLE schema_version (
+                version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
+            );
+            INSERT INTO schema_version (
+                version, applied_at
+            ) VALUES (2, '2026-07-27T00:00:00+00:00');
+            CREATE TABLE scan_sessions (
+                session_id TEXT PRIMARY KEY, root_path TEXT NOT NULL,
+                started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
+                is_recursive INTEGER NOT NULL DEFAULT 1,
+                total_files INTEGER NOT NULL DEFAULT 0,
+                total_compatible INTEGER NOT NULL DEFAULT 0,
+                total_not_compatible INTEGER NOT NULL DEFAULT 0,
+                total_skipped INTEGER NOT NULL DEFAULT 0,
+                total_errors INTEGER NOT NULL DEFAULT 0
+            );
+            INSERT INTO scan_sessions (
+                session_id, root_path, started_at, status
+            ) VALUES (
+                'migrate-v3-test', '/tmp', '2026-07-27T00:00:00+00:00', 'completed'
+            );
+            CREATE TABLE scan_entries (
+                entry_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, absolute_path TEXT NOT NULL,
+                relative_path TEXT NOT NULL, name TEXT NOT NULL,
+                extension TEXT NOT NULL DEFAULT '',
+                element_type TEXT NOT NULL DEFAULT 'file',
+                size INTEGER, modified_at TEXT,
+                is_compatible INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'indexed', skip_reason TEXT,
+                is_code_project INTEGER NOT NULL DEFAULT 0,
+                skip_detail TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+            );
+            INSERT INTO scan_entries (
+                session_id, absolute_path, relative_path,
+                name, extension, status
+            ) VALUES (
+                'migrate-v3-test', '/tmp/doc.pdf', 'doc.pdf',
+                'doc.pdf', '.pdf', 'indexed'
+            );
+            CREATE TABLE scan_errors (
+                error_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, affected_path TEXT NOT NULL,
+                error_code TEXT NOT NULL, message TEXT NOT NULL,
+                occurred_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+            );
+            CREATE TABLE scan_exclusion_rules (
+                rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL, pattern TEXT NOT NULL,
+                source TEXT NOT NULL, created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
+            );
+        """)
+        conn.commit()
+        conn.close()
+
+        repo = SqliteScanSessionRepository(db_path)
+
+        conn = sqlite3.connect(str(db_path))
+        version = conn.execute("SELECT MAX(version) FROM schema_version").fetchone()[0]
+        session_count = conn.execute("SELECT COUNT(*) FROM scan_sessions").fetchone()[0]
+        entry_count = conn.execute("SELECT COUNT(*) FROM scan_entries").fetchone()[0]
+        has_hashes_table = (  # noqa: E501
+            conn.execute(  # noqa: E501
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='content_hashes'"  # noqa: E501
+            ).fetchone()
+            is not None
+        )
+        conn.close()
+        repo.close()
+
+        assert version == 4
+        assert session_count == 1
+        assert entry_count == 1
+        assert has_hashes_table
+
+    def test_v3_has_expected_indexes(self, tmp_path: Path) -> None:
+        import sqlite3
+
+        db_path = tmp_path / "v3_indexes.db"
+        repo = SqliteScanSessionRepository(db_path)
+        conn = sqlite3.connect(str(db_path))
+        indexes = [  # noqa: E501
+            r[1]  # noqa: E501
+            for r in conn.execute(  # noqa: E501
+                "SELECT * FROM sqlite_master WHERE type='index' AND tbl_name='content_hashes'"  # noqa: E501
+            ).fetchall()
+        ]
+        conn.close()
+        repo.close()
+
+        assert "idx_content_hashes_entry" in indexes
+        assert "idx_content_hashes_hash" in indexes
+        assert "idx_content_hashes_session" in indexes

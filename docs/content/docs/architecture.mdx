@@ -14,7 +14,83 @@ El proyecto sigue una arquitectura en cuatro capas:
 - **application** — Casos de uso que coordinan el flujo entre capas.
 - **infrastructure** — Implementaciones concretas: sistema de archivos, base
   de datos, extractores, OCR y clasificadores.
-- **ui** — Presentación de información. No contiene lógica principal.
+- **ui** — Presentación de información. No contiene lógica principal. Utiliza
+  PySide6 para la interfaz gráfica de escritorio.
+
+## Capa UI
+
+**Ubicación:** `src/folderscribe/ui/`
+
+La capa de presentación está construida con PySide6 (Qt for Python) y sigue
+el patrón de composición manual, igual que la CLI.
+
+### Módulos
+
+| Módulo | Responsabilidad |
+|---|---|
+| `qt_app.py` | Inicializa `QApplication` y expone `run_gui()` |
+| `composition.py` | Fábrica de dependencias; instancia scanner, repositorio y caso de uso |
+| `main_window.py` | `QMainWindow` con todos los widgets |
+| `view_model.py` | Transforma `InventoryResult` en `list[DisplayRow]` para la tabla |
+| `table_model.py` | `QAbstractTableModel` y `QSortFilterProxyModel` para la tabla de resultados |
+| `scan_worker.py` | `QThread` que ejecuta `ScanFolderUseCase` sin bloquear la UI |
+| `extract_worker.py` | `QThread` que ejecuta `ExtractTextUseCase` sin bloquear la UI |
+| `ocr_worker.py` | `QThread` que ejecuta `OcrTextUseCase` sin bloquear la UI |
+
+### Flujo GUI → caso de uso → escáner → persistencia
+
+```
+folderscribe gui
+  │
+  ├─ composition.py crea:
+  │     OsDirectoryScanner()
+  │     SqliteScanSessionRepository(db_path)
+  │     ScanFolderUseCase(scanner, repository)
+  │
+  ├─ Usuario selecciona carpeta y exclusiones
+  │
+  ├─ [Escanear] → scan_worker.py:
+  │     ├─ ejecuta use_case.execute(root, exclusion_rules)
+  │     └─ emite finished(ScanResult) o failed(str)
+  │
+  ├─ main_window.py recibe ScanResult
+  │     ├─ view_model.transform(inventory, root) → list[DisplayRow]
+  │     ├─ table_model.set_rows(rows)
+  │     ├─ actualiza resumen
+  │     └─ actualiza pestaña de errores
+  │
+  └─ Usuario filtra y revisa resultados
+```
+
+### Reglas
+
+- La capa ui **no duplica** lógica de domain, application ni infrastructure.
+- La ui **no contiene** lógica de escaneo, exclusión, clasificación ni
+  persistencia.
+- Toda operación larga se ejecuta en `QThread` para no bloquear la
+  interfaz.
+- Las dependencias se componen en `composition.py`, no dentro de
+  `QMainWindow`.
+- PySide6 es una dependencia opcional (`pip install folderscribe[gui]`).
+  Sin ella, `folderscribe gui` muestra un mensaje claro.
+
+### Módulos OCR
+
+| Módulo | Responsabilidad |
+|---|---|
+| `domain/ocr.py` | Modelos puros: `OcrMode`, `OcrPage`, `OcrPdfDocument`, `OcrResult`, `OcrError` |
+| `domain/interfaces.py` | Interfaz `OcrEngine` |
+| `application/ocr_text.py` | `OcrTextUseCase`: coordina OCR de extracciones `needs_ocr`, reutilización, cancelación y persistencia |
+| `infrastructure/ocr/tesseract_engine.py` | `TesseractOcrEngine`: render con PyMuPDF + Tesseract vía pytesseract |
+| `ui/ocr_worker.py` | `OcrWorker` (QThread) con motor inyectable |
+
+### Reglas OCR
+
+- El dominio no importa PyMuPDF, pytesseract ni Tesseract.
+- El OCR solo procesa extracciones con `needs_ocr = True` y respeta el
+  `privacy_filter` (niveles Local y Completo).
+- Si tesseract no está instalado, el sistema degrada con un mensaje claro;
+  no falla ni escribe nada.
 
 ## Reglas
 
@@ -22,26 +98,58 @@ El proyecto sigue una arquitectura en cuatro capas:
 - No usar una ruta generada por IA directamente como destino.
 - Los servicios externos deben consumirse a través de interfaces.
 
-## Flujo del inventario con persistencia
+## Exclusiones personalizadas
+
+### ExclusionMatcher (dominio)
+
+**Ubicación:** `src/folderscribe/domain/exclusion.py`
+
+`ExclusionMatcher` es un servicio puro del dominio que determina si una ruta
+relativa debe ser excluida según una lista de `ExclusionRule`. No contiene
+detalles de argparse, SQLite ni del sistema operativo.
+
+**Semántica de patrones:**
+
+1. Sin `/` → se compara con el nombre base a cualquier profundidad (`fnmatch`).
+2. Con `/` → se compara con la ruta relativa completa (`fnmatch`).
+3. Sensible a mayúsculas/minúsculas.
+4. Directorio excluido → poda completa del subárbol.
+
+### Precedencia en el escáner
 
 ```
-CLI (folderscribe scan RUTA [--database RUTA_DB])
-  │
-  ├─> ScanFolderUseCase(scanner, repository?)
-  │     │
-  │     ├─ Si hay repositorio: crea ScanSession (RUNNING)
-  │     │   └─ SqliteScanSessionRepository.create_session()
-  │     │
-  │     ├─ OsDirectoryScanner.scan(root) → InventoryResult
-  │     │
-  │     └─ Si hay repositorio:
-  │           ├─ Mapea InventoryResult → ScanEntry[]
-  │           ├─ SqliteScanSessionRepository.complete_session()
-  │           │   (actualiza estado, guarda entradas y errores)
-  │           └─ Si falla: SqliteScanSessionRepository.mark_session_failed()
-  │
-  └─ CLI imprime resumen (ID sesión, ruta DB, estadísticas)
+1. ¿Es symlink?                    → skip (symlink)
+2. ¿Es directorio técnico?         → skip (excluded_directory)
+3. ¿Es proyecto de código?         → skip (code_project)
+4. ¿Coincide con exclusión user?   → skip (excluded_by_user_pattern)
+5. Archivo normal                  → indexar
 ```
+
+### Flujo CLI → caso de uso → escáner → persistencia
+
+```
+CLI: folderscribe scan RUTA [--exclude PATRON ...]
+  │
+  ├─ 1. Validar patrones (vacío, absoluto)
+  │
+  ├─ 2. Convertir a tuple[ExclusionRule, ...] source=USER
+  │
+  ├─ 3. ScanFolderUseCase.execute(root, exclusion_rules)
+  │     │
+  │     ├─ a. Crear sesión → repository.create_session() [RUNNING]
+  │     ├─ b. Guardar reglas → repository.save_exclusion_rules()
+  │     ├─ c. OsDirectoryScanner.scan(root, exclusion_rules)
+  │     │       └─ ExclusionMatcher.is_excluded(relative_path)
+  │     ├─ d. Si éxito: repository.complete_session()
+  │     └─ e. Si fallo: repository.mark_session_failed()
+  │           (reglas ya persistidas en 3b, no se pierden)
+  │
+  └─ CLI imprime resumen
+```
+
+**Importante:** argparse no contiene lógica de coincidencia. Solo convierte
+cadenas a `ExclusionRule`. Toda la lógica de patrones está en
+`ExclusionMatcher` (dominio).
 
 ### Módulo SQLite
 
@@ -50,7 +158,7 @@ CLI (folderscribe scan RUTA [--database RUTA_DB])
   `ScanSessionRepository` (definido en `domain/interfaces.py`)
 - **Ruta por defecto:** `$XDG_DATA_HOME/folderscribe/folderscribe.db`
   (fallback: `~/.local/share/folderscribe/folderscribe.db`)
-- **Esquema:** versionado (V1), idempotente, `PRAGMA foreign_keys = ON`
+- **Esquema:** versionado (V3), idempotente, `PRAGMA foreign_keys = ON`
 - **Transacciones:** cortas y separadas (creación de sesión y guardado final)
 
 La CLI no ejecuta SQL directamente. Toda la lógica de base de datos reside en

@@ -10,6 +10,15 @@ description: Modelos de dominio y esquema SQLite de FolderScribe.
 ### Modelos de dominio (inmutables)
 
 ```python
+class RuleSource(Enum):
+    USER = "user"
+    TECHNICAL = "technical"  # Reserved
+
+@dataclass(frozen=True)
+class ExclusionRule:
+    pattern: str
+    source: RuleSource
+
 @dataclass(frozen=True)
 class FileEntry:
     path: Path
@@ -21,7 +30,7 @@ class FileEntry:
 class SkippedEntry:
     path: Path
     reason: str
-    details: str = ""
+    details: str = ""  # Para "excluded_by_user_pattern": patrón
 
 @dataclass(frozen=True)
 class ScanError:
@@ -37,6 +46,62 @@ class InventoryResult:
     files: tuple[FileEntry, ...] = ()
     skipped: tuple[SkippedEntry, ...] = ()
     errors: tuple[ScanError, ...] = ()
+```
+
+### HashStatus (nuevo en V3)
+
+```python
+class HashStatus(Enum):
+    PENDING = "pending"
+    COMPUTED = "computed"
+    REUSED = "reused"
+    SKIPPED = "skipped"
+    MODIFIED_DURING_READ = "modified_during_read"
+    ERROR = "error"
+```
+
+### ContentHash (nuevo en V3)
+
+```python
+@dataclass(frozen=True)
+class ContentHash:
+    absolute_path: Path
+    algorithm: str        # "sha-256"
+    hash_sha256: str | None
+    file_size: int
+    file_modified_at: datetime
+    status: HashStatus
+    error_message: str | None = None
+    computed_at: datetime | None = None
+```
+
+### DuplicateGroup (nuevo en V3)
+
+```python
+@dataclass(frozen=True)
+class DuplicateGroup:
+    group_id: str
+    hash_sha256: str
+    file_size: int
+    file_count: int
+    wasted_space: int
+    file_paths: tuple[Path, ...]
+```
+
+### HashResult (nuevo en V3)
+
+```python
+@dataclass(frozen=True)
+class HashResult:
+    session_id: str
+    hashes: tuple[ContentHash, ...]
+    total_processed: int
+    computed_count: int
+    reused_count: int
+    skipped_count: int
+    modified_count: int
+    error_count: int
+    duplicate_groups: tuple[DuplicateGroup, ...]
 ```
 
 ### Sesiones y elementos persistidos
@@ -77,9 +142,119 @@ class ScanEntry:
     status: str = "indexed"
     skip_reason: str | None = None
     is_code_project: bool = False
+    skip_detail: str = ""  # Detalle textual (patrón coincidente, etc.)
 ```
 
-## Esquema SQLite (V1)
+### Modelos de dominio OCR (nuevos)
+
+**Ubicación:** `src/folderscribe/domain/ocr.py`
+
+```python
+class OcrMode(Enum):
+    FAST = "fast"
+    FULL = "full"
+
+class OcrError(Exception):
+    def __init__(self, code: str, message: str) -> None: ...
+
+@dataclass(frozen=True)
+class OcrPage:
+    page_number: int
+    text: str
+    error_message: str | None = None
+
+@dataclass(frozen=True)
+class OcrPdfDocument:
+    absolute_path: Path
+    total_pages: int
+    processed_pages: int
+    pages: tuple[OcrPage, ...]
+    engine: str
+    engine_version: str
+
+@dataclass(frozen=True)
+class OcrResult:
+    session_id: str
+    ocr_extractions: tuple[TextExtraction, ...]
+    total_processed: int
+    engine_available: bool
+    ocr_count: int
+    reused_count: int
+    partial_count: int
+    skipped_count: int
+    error_count: int
+    cancelled_count: int
+    stale_count: int
+```
+
+### OcrEngine (nuevo)
+
+**Interfaz:** `src/folderscribe/domain/interfaces.py`
+
+```python
+class OcrEngine(ABC):
+    @abstractmethod
+    def is_available(self) -> bool: ...
+    @abstractmethod
+    def ocr_pdf(
+        self, path: Path, mode: OcrMode,
+        max_pages: int = 500, lang: str = "eng",
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> OcrPdfDocument: ...
+    @property
+    @abstractmethod
+    def name(self) -> str: ...
+    @property
+    @abstractmethod
+    def version(self) -> str: ...
+```
+
+**Implementación:** `src/folderscribe/infrastructure/ocr/tesseract_engine.py`
+
+`TesseractOcrEngine` renderiza las páginas con PyMuPDF en memoria y ejecuta
+Tesseract a través de `pytesseract`. Modos: rápido = 150 DPI/PSM 3,
+completo = 300 DPI/PSM 6.
+
+### ExclusionMatcher (dominio)
+
+**Ubicación:** `src/folderscribe/domain/exclusion.py`
+
+```python
+import fnmatch
+
+class ExclusionMatcher:
+    def __init__(self, rules: tuple[ExclusionRule, ...]) -> None:
+        self._rules = rules
+
+    def is_excluded(self, relative_path: str) -> tuple[bool, ExclusionRule | None]:
+        for rule in self._rules:
+            if "/" not in rule.pattern:
+                basename = relative_path.rsplit("/", 1)[-1]
+                if fnmatch.fnmatch(basename, rule.pattern):
+                    return True, rule
+            else:
+                if fnmatch.fnmatch(relative_path, rule.pattern):
+                    return True, rule
+        return False, None
+```
+
+### ContentHasher (nuevo en V3)
+
+**Interfaz:** `src/folderscribe/domain/interfaces.py`
+
+```python
+class ContentHasher(ABC):
+    @abstractmethod
+    def compute_hash(self, path: Path) -> ContentHash: ...
+```
+
+**Implementación:** `src/folderscribe/infrastructure/hasher.py`
+
+`StreamingHasher` lee archivos por bloques de 64 KB, calcula SHA-256, verifica
+estabilidad del archivo (stat previo y posterior) y maneja errores sin detener
+el proceso.
+
+## Esquema SQLite (V3)
 
 Todas las tablas se crean con `CREATE TABLE IF NOT EXISTS`. La versión del
 esquema se almacena en `schema_version`.
@@ -126,6 +301,17 @@ Las fechas se serializan en formato ISO 8601 UTC.
 | status | TEXT | `indexed` o `skipped` |
 | skip_reason | TEXT | Motivo de omisión cuando existe |
 | is_code_project | INTEGER | 1 si se detectó como proyecto de código |
+| skip_detail | TEXT | Detalle textual (patrón coincidente, etc.) |
+
+### `scan_exclusion_rules` (añadida en V2)
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| rule_id | INTEGER (PK, auto) | Identificador interno |
+| session_id | TEXT (FK) | Sesión a la que pertenece |
+| pattern | TEXT | Patrón de exclusión (ej: `*.tmp`, `privado/**`) |
+| source | TEXT | `user` o `technical` (reservado) |
+| created_at | TEXT | Fecha/hora de creación de la regla |
 
 ### `scan_errors`
 
@@ -138,6 +324,38 @@ Las fechas se serializan en formato ISO 8601 UTC.
 | message | TEXT | Mensaje descriptivo seguro |
 | occurred_at | TEXT | Fecha/hora del error |
 
+### `content_hashes` (añadida en V3)
+
+| Columna | Tipo | Descripción |
+|---------|------|-------------|
+| hash_id | INTEGER (PK, auto) | Identificador interno |
+| session_id | TEXT (FK) | Sesión a la que pertenece |
+| entry_id | INTEGER (FK) | Entrada de archivo correspondiente |
+| algorithm | TEXT | Algoritmo usado (`sha-256`) |
+| hash_sha256 | TEXT | Huella hexadecimal SHA-256 |
+| file_size | INTEGER | Tamaño del archivo al momento del cálculo |
+| file_modified_at | TEXT | Fecha de modificación al momento del cálculo |
+| status | TEXT | Estado: `pending`, `computed`, `reused`, `skipped`, `modified_during_read`, `error` |
+| error_message | TEXT | Mensaje de error si el cálculo falló |
+| computed_at | TEXT | Fecha/hora del cálculo de la huella |
+
+**Índices:**
+
+- `idx_content_hashes_entry` sobre `entry_id`
+- `idx_content_hashes_hash` sobre `hash_sha256`
+- `idx_content_hashes_session` sobre `session_id`
+
+### Significado de los estados de huella
+
+| Estado | Descripción |
+|--------|-------------|
+| `pending` | Pendiente de procesar |
+| `computed` | SHA-256 recién calculado |
+| `reused` | Huella existente reutilizada (mismo tamaño y fecha de modificación) |
+| `skipped` | Omitido (directorio, symlink, archivo sin metadatos) |
+| `modified_during_read` | El archivo cambió mientras se leía; no se acepta la huella |
+| `error` | Error de lectura, permisos, o archivo desaparecido |
+
 ## Claves foráneas
 
 ```sql
@@ -146,11 +364,59 @@ FOREIGN KEY (session_id) REFERENCES scan_sessions(session_id)
 
 Activadas mediante `PRAGMA foreign_keys = ON`.
 
+## Notas sobre V3
+
+- **Migración V2→V3:** secuencial. Base nueva: se crea V1, V2 y luego V3.
+  Base V2 existente: se añade la tabla `content_hashes` con sus índices.
+- **Idempotente:** `CREATE TABLE IF NOT EXISTS` y `CREATE INDEX IF NOT EXISTS`.
+  La migración puede ejecutarse múltiples veces sin romperse.
+- **Reutilización de huellas:** La consulta `find_reusable_hash` busca
+  `content_hashes` donde coincidan `absolute_path`, `file_size` y
+  `file_modified_at`, independientemente de la sesión.
+- **Duplicados exactos:** Se agrupan por `(hash_sha256, file_size)` donde
+  `status IN ('computed', 'reused')` y `COUNT(*) > 1`. Archivos sin huella
+  válida no se consideran duplicados.
+
+## Flujo de cálculo de huellas
+
+```
+1. Escaneo completado → sesión guardada en scan_sessions y scan_entries
+2. Usuario pulsa "Calcular huellas" en la GUI
+3. HashWorker (QThread) inicia:
+   a. Carga scan_entries filtrando solo files indexed
+   b. Por cada archivo:
+      - Busca huella reutilizable por absolute_path + size + mtime
+      - Si no existe → StreamingHasher.compute_hash():
+        * is_symlink() → skip
+        * stat previo
+        * SHA-256 por bloques de 64 KB
+        * stat posterior
+        * Si cambió → modified_during_read
+      - Guarda en content_hashes (transacción por lote)
+   c. find_duplicates agrupa por hash_sha256 HAVING COUNT(*) > 1
+4. GUI muestra: conteos de calculadas/reutilizadas/errores, pestaña de duplicados
+```
+
+## OCR y `text_extractions`
+
+El OCR reutiliza la tabla `text_extractions` sin migración:
+
+- Cada resultado OCR se guarda como fila nueva con `extractor = "pdf_ocr"`,
+  `extractor_version = <versión del motor>` y `needs_ocr = 0`.
+- La reutilización se basa en `find_reusable_extraction` con una
+  `config_version` propia del OCR (`ocr_config_version` en
+  `extraction_config.py`: modo, DPI, PSM, idioma y versión del motor). No
+  invalida la caché de la extracción de texto normal.
+- `get_text_extraction_by_path` (nueva) y `get_text_extraction_by_entry`
+  ordenan por `needs_ocr ASC, extraction_id DESC`: el contenido OCR tiene
+  preferencia sobre la fila `NEEDS_OCR` original al consultar contenido.
+- Si `tesseract-ocr` no está instalado, `OcrTextUseCase` devuelve
+  `OcrResult` con `engine_available = False` sin escribir nada.
+
 ## Modelo futuro (no implementado)
 
 En versiones posteriores se añadirán tablas para:
 
-- **Hashes SHA-256** y detección de duplicados exactos.
 - **Contenido extraído** (texto, OCR).
 - **Clasificaciones y etiquetas**.
 - **Propuestas de movimiento y renombrado**.
